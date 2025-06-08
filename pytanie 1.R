@@ -149,9 +149,9 @@ kolumna_zyski <- c(kolumna_zyski, zyski)
 kolumna_koszty <- c(kolumna_koszty, koszty)
 }
 
-podsumowanie <- data.frame(wycieczka = kolumna_wyprawa, zyski=kolumna_zyski,
+podsumowanie <- data.frame(wycieczka = kolumna_wyprawa, przychody=kolumna_zyski,
                            koszty = kolumna_koszty,
-                           "zysk dla firmy"=round(kolumna_zyski-kolumna_koszty,2))
+                           "dochody/straty"=round(kolumna_zyski-kolumna_koszty,2))
 
 
 
