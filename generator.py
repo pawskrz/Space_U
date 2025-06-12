@@ -22,8 +22,8 @@ fake = Faker()
 DB_CONFIG = {
     'host': 'localhost',
     'port': 3307,   # default: 3306
-    'user': 'elond',       # Replace with your MariaDB username
-    'password': 'root',   # Replace with your MariaDB password
+    'user': 'root',       # Replace with your MariaDB username
+    'password': 'Maja',   # Replace with your MariaDB password
     'database': 'space_u'
 }
 
