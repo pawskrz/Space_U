@@ -22,8 +22,8 @@ fake = Faker()
 DB_CONFIG = {
     'host': 'localhost',
     'port': 3307,   # default: 3306
-    'user': 'root',       # Replace with your MariaDB username
-    'password': 'Maja',   # Replace with your MariaDB password
+    'user': 'elond',       # Replace with your MariaDB username
+    'password': 'root',   # Replace with your MariaDB password
     'database': 'space_u'
 }
 
@@ -447,7 +447,6 @@ def populate_data():
         conn.commit()
         if not customer_ids: print("Warning: No customers generated.")
 
-
         # --- oferty ---
         print("Generating Offers...")
         offer_ids = []
@@ -463,7 +462,7 @@ def populate_data():
                       decimal.Decimal(random.randrange(100000, 200000))/100, #ceny losowe (zeby nie bylo ze np. 80% ceny A to cena B, zeby normalizacja dalej byla)
                       decimal.Decimal(random.randrange(50000, 100000))/100, #ale na siebie nie nachodzą żeby nie wyszlo przypadkiem ze klasa A jest tansza od B
                       decimal.Decimal(random.randrange(10000, 50000))/100,
-                      decimal.Decimal(random.randrange(1000, 1000000))/100)) #jakis losowy extra cost - moze byc bardzo wysoki i oferta sie nie oplacila, moze byc niski i byla oplacalna
+                      decimal.Decimal(random.randrange(1000, 100000))/100)) #jakis losowy extra cost - moze byc bardzo wysoki i oferta sie nie oplacila, moze byc niski i byla oplacalna
                 offer_ids.append(cursor.lastrowid)
         conn.commit()
         if not offer_ids:
@@ -585,11 +584,11 @@ def populate_data():
                         current_trip_booked_seats = {'class_A': 0, 'class_B': 0, 'class_C': 0}
                         model_class_caps = {'class_A': class_A_capacity, 'class_B': class_B_capacity, 'class_C': class_C_capacity} #sprawdzamy ile model zmiesci ludzi
                         assigned_customers_for_this_trip_details = [] #lista na przechowywanie szczegołów dostępności
-                        max_customers_to_book_this_flight = random.randint(1, min(model_total_capacity, len(customer_ids) if customer_ids else 0, 10)) #ile statek zmiesci ludzi
+                        max_customers_to_book_this_flight = random.randint(1, min(model_total_capacity, len(customer_ids))) #ile statek zmiesci ludzi
                         #moze byc mniej niz wolnych miejsc albo caly statek - wybiera minimumm
 
                         if customer_ids : #jesli istnieja customerzy
-                            potential_customer_candidates = [cid for cid in random.sample(customer_ids, min(len(customer_ids), max_customers_to_book_this_flight + 20)) if is_resource_available(cid, outbound_departure_date, trip_completion_date, customer_schedules)]
+                            potential_customer_candidates = [cid for cid in random.sample(customer_ids, min(len(customer_ids), max_customers_to_book_this_flight + 200)) if is_resource_available(cid, outbound_departure_date, trip_completion_date, customer_schedules)]
                             #to wybieramy potencjalnych kandydatów z tych którzy są dostępni
                             for cust_id in potential_customer_candidates:
                                 if len(assigned_customers_for_this_trip_details) >= max_customers_to_book_this_flight: break #wybieramy az sie skoncza miejsca
@@ -600,12 +599,13 @@ def populate_data():
                                 current_trip_booked_seats[chosen_class] += 1 #bookuje kolejne miejsce
                         
                         # --- załoga ---
-                        num_crew_needed = random.randint(2, min(4, len(employee_ids) if employee_ids else 0)) #minimum potrzebnej załogi
+                        num_crew_needed = random.randint(2, min(4, len(employee_ids))) #minimum potrzebnej załogi
                         assigned_crew_final_ids = [] #to na potem
                         if employee_ids:
                             potential_crew_candidates = [eid for eid in random.sample(employee_ids, min(len(employee_ids), num_crew_needed + 10)) if is_resource_available(eid, outbound_departure_date, trip_completion_date, employee_schedules)]
                             if len(potential_crew_candidates) >= num_crew_needed:
                                 assigned_crew_final_ids = random.sample(potential_crew_candidates, num_crew_needed)
+                                
                         
                         chosen_ship_id_for_trip = current_ship_candidate_id #wybiera losowo
 
@@ -651,12 +651,13 @@ def populate_data():
 
         # --- roczne ceny paliwa generujemy randomow ---
         print("Generating Year Fuel Prices...")
-        current_yr = START_DATE.year
-        for i in range(NUM_YEAR_FUEL_ENTRIES):
-            year_date_fuel = datetime(current_yr + i, random.randint(1,12), random.randint(1,28)).date()
+        start_year = START_DATE.year
+        end_year = END_DATE.year
+        for i in range(start_year, end_year + 1):
+            year_date = datetime(i, 1, 1).date() 
             cursor.execute("""
                 INSERT INTO year_fuel (year, price) VALUES (%s, %s)
-            """, (year_date_fuel, decimal.Decimal(random.randrange(100, 500))/100))
+            """, (year_date, decimal.Decimal(random.randrange(100, 500))/100))
         conn.commit()
 
         print("Data population completed successfully!")
