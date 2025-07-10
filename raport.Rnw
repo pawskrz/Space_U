@@ -1,0 +1,745 @@
+\documentclass[12pt, a4paper]{article}
+
+%dodatkowe pakiety LaTeX
+\usepackage[OT4]{polski}
+\usepackage[polish]{babel}  
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[top=2.5cm, bottom=2.5cm, left=2cm, right=2cm]{geometry}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage[colorlinks=true, linkcolor=blue]{hyperref}
+\usepackage{anyfontsize}
+\usepackage{bbm}
+\usepackage{amsmath}
+\usepackage{animate}
+\usepackage{Sweave}
+\usepackage{verbatim}
+\newcommand{\framedtext}[1]{%
+\par%
+\noindent\fbox{%
+    \parbox{\dimexpr\linewidth-2\fboxsep-2\fboxrule}{#1}%
+}%
+}
+
+% ustawienia globalne
+<<ustawienia_globalne, echo=FALSE>>=
+library(knitr)
+library(latex2exp)
+library(ggplot2)
+library(vctrs)
+library(xtable)
+opts_chunk$set(fig.path='figure/', fig.align='center', fig.pos='H',fig.width=4, fig.height=3)
+pdf.options(encoding='CP1250')
+@
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{document}
+\SweaveOpts{concordance=TRUE}
+
+\title{Analiza danych\\
+Raport}
+\author{Maja Wiącek, Jakub Lis, Paweł Skrzypczyński, Tymon Świtalski}
+\date{Bazy Danych 2025}
+\maketitle
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.4\textwidth]{logo.png}
+\end{figure}
+
+\tableofcontents
+
+
+
+\newpage
+
+<<polaczenie,echo=FALSE,eval=TRUE>>=
+library(RMariaDB)
+
+con <- dbConnect(RMariaDB::MariaDB(),
+                 dbname = "space_u",
+                 username = "root",
+                 password = "maja",
+                 port = 3306,
+                 host = "localhost")
+
+@
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\section{Opis firmy}
+
+Firma \textbf{Space-U} działa na rynku od 2019 roku. Obecnie w ofercie znajduje się aż 40 wycieczek.
+
+<<opis_firmy_1,echo=FALSE,eval=TRUE,results=tex>>=
+query <- paste("SELECT ",
+  "o.offer_id AS 'numer wycieczki',",
+  "pf.name AS 'planeta startu',",
+  "pt.name AS 'destynacja',",
+  "CASE",
+    "WHEN o.type = 'TOURIST_SIGHTSEEING' THEN 'lot turystyczny'",
+    "WHEN o.type = 'CELEBRATION_FLIGHT' THEN 'lot okolicznościowy'",
+    "WHEN o.type = 'LUXURY_CRUISE' THEN 'rejs luksusowy'",
+    "ELSE o.type",
+  "END AS 'rodzaj'",
+"FROM offer o",
+"JOIN planet pf ON o.flight_from = pf.planet_id",
+"JOIN planet pt ON o.flight_to = pt.planet_id",
+"ORDER BY o.offer_id;
+")
+wycieczki <- dbGetQuery(con, query)
+tabela <- as.matrix(wycieczki)
+colnames(tabela)<-c("Numer wycieczki","Planeta startu","Destynacja","Rodzaj")
+print(xtable::xtable(tabela,caption="Aktualna oferta firmy wycieczkowej Space-U"),
+      type="latex",table.placement = "H",caption.placement = "top",
+      include.rownames = FALSE)
+@
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\section{Pytanie 1}
+
+\textbf{Znajdź najpopularniejsze rodzaje wypraw, porównaj koszta i zyski, czy są opłacalne?}
+
+<<pytanie_1,echo=FALSE,eval=TRUE>>=
+query <- paste(
+          "SELECT type, COUNT(*) AS count",
+          "from flight",
+          "INNER JOIN offer USING (offer_id)",
+          "GROUP BY type",
+          "ORDER BY count DESC;")
+
+rodzaje <- dbGetQuery(con, query)
+
+kolumna_zyski <- c()
+kolumna_koszty <- c()
+kolumna_rodzaj <- c()
+
+for (k in 1:3){
+rodzaj <- rodzaje$type[k]
+
+kolumna_rodzaj <- c(kolumna_rodzaj, rodzaj)
+
+query <- paste(
+  "SELECT *",
+  "FROM flight",
+  "INNER JOIN offer USING (offer_id)",
+  "WHERE type LIKE", paste0("'", as.character(rodzaj), "'")
+)
+
+df <- dbGetQuery(con, query)
+
+liczba_wystapien <- table(df$offer_id)
+liczba_wystapien
+
+oferty_id <- as.numeric(names(liczba_wystapien))
+oferty_id <- unlist(oferty_id)
+
+zyski <- 0
+koszty <- 0
+
+n <- length(oferty_id)
+
+for (j in 1:n){
+  
+  i <- oferty_id[j]
+  query <- paste(
+    "SELECT *",
+    "from flight_customer",
+    "INNER JOIN flight USING (flight_id)",
+    "INNER JOIN offer USING (offer_id)",
+    "WHERE offer_id LIKE", as.character(i)
+  )
+  
+  df <- dbGetQuery(con, query)
+  
+  model <- df$model_id[1]
+  bilety <- c(class_A = df$class_A[1], 
+              class_B = df$class_B[1], 
+              class_C = df$class_C[1])
+  extra_cost <- df$extra_cost[1]
+  
+  #------------------- zyski 
+  
+  query <- paste(
+    "SELECT class, COUNT(*) AS count",
+    "FROM flight_customer",
+    "INNER JOIN flight USING (flight_id)",
+    "INNER JOIN offer USING (offer_id)",
+    "WHERE offer_id LIKE", as.character(i),
+    "GROUP BY class"
+  )
+  
+  df <- dbGetQuery(con, query)
+
+  df$class <- as.character(df$class)
+
+  df$price <- bilety[df$class]
+
+  zyski <- sum(df$price * as.numeric(df$count), na.rm = TRUE)
+
+  
+  #------------------- koszty
+  
+  ile <- unname(liczba_wystapien)[j]
+  
+  koszty <- extra_cost * ile
+
+  query <- paste(
+    "SELECT *",
+    "FROM model",
+    "WHERE model_id LIKE", model
+  )
+  
+  df <- dbGetQuery(con, query)
+  paliwo_start <- df$fuel_per_start[1]
+  
+  query <- paste(
+    "SELECT *",
+    "FROM flight f",
+    "JOIN year_fuel fp",
+    "ON YEAR(f.departure) = YEAR(fp.year)",
+    "INNER JOIN offer USING (offer_id)",
+    "WHERE offer_id LIKE", as.character(i)
+  )
+  
+  df <- dbGetQuery(con, query)
+  
+  koszty <- koszty + 2*sum(df$price)*paliwo_start
+  
+}
+
+kolumna_zyski <- c(kolumna_zyski, zyski)
+kolumna_koszty <- c(kolumna_koszty, koszty)
+
+}
+
+podsumowanie <- data.frame(rodzaj=kolumna_rodzaj,
+                           przychody=kolumna_zyski,
+                           koszty = kolumna_koszty,
+                           "dochody/straty"=round(kolumna_zyski-kolumna_koszty,2))
+najpopularniejsza <- ifelse(podsumowanie$rodzaj[1] == "TOURIST_SIGHTSEEING", "lot turystyczny",
+                            ifelse(podsumowanie$rodzaj[1] == "CELEBRATION_FLIGHT", "lot okolicznościowy",
+                                   ifelse(podsumowanie$rodzaj[1] == "LUXURY_CRUISE", "rejs luksusowy")))
+
+ile_klientów <- as.numeric(rodzaje$count[1])
+ile_zarabia <- podsumowanie$dochody.straty[1]
+@
+
+<<pytanie_1_wyniki,echo=FALSE,eval=TRUE,results=tex>>=
+tabela <- as.matrix(podsumowanie[, -1])
+rownames(tabela)<-c("lot turystyczny", "lot okolicznościowy", "rejs luksusowy")
+colnames(tabela)<-c("Przychody","Koszty","Zyski/straty")
+print(xtable::xtable(tabela,caption="Podsumowanie kosztów najpopularniejszych rodzajów wypraw",label="tab:1"),
+      type="latex",table.placement = "H",caption.placement = "top")
+@
+
+Najpopularniejszym typem wycieczek jest \Sexpr{najpopularniejsza}. Przez ostatnie 5 lat odbył się on aż \Sexpr{ile_klientów} razy. Na tym rodzaju wycieczek firma Space-U \Sexpr{if (ile_zarabia > 0) "zarabia" else "traci"} \Sexpr{ile_zarabia} złotych, więc jest on \Sexpr{if (ile_zarabia > 0) "opłacalny" else "nieopłacalny"} dla firmy.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\section{Pytanie 2}
+
+\textbf{Sporządź wykres liczby obsłużonych klientów w każdym miesiącu działalności firmy, 
+czy firma rośnie, czy podupada?}
+
+\begin{center}
+<<pytanie_2,echo=FALSE,fig=TRUE,eval=TRUE,height=2.5, width=4>>=
+query <- paste(
+  "SELECT",
+  "YEAR(departure) AS year,",
+  "MONTH(departure) AS month,",
+  "COUNT(*) AS count",
+  "FROM flight",
+  "INNER JOIN flight_customer USING (flight_id)",
+  "GROUP BY YEAR(departure), MONTH(departure)",
+  "ORDER BY year, month;"
+)
+
+df <- dbGetQuery(con, query)
+
+df$data <- sprintf("%d-%02d", df$year, df$month)
+
+n_0<-length(df$count)
+
+srednia_1 <- as.numeric(mean(df$count[1:floor(n/2)]))
+srednia_2 <- as.numeric(mean(df$count[floor(n/2):n]))
+
+ggplot(df, aes(x = data, y = count)) +
+  geom_bar(stat = "identity", fill = "#B76DE2") +
+  labs(
+    title = "Liczba obsłużonych klientów w każdym miesiącu działalności firmy",
+    y = "Liczba klientów",
+    x = NULL
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    axis.text.x = element_text(angle = 60, hjust = 1, size = 6),
+    axis.title.y = element_text(size = 7),
+    plot.title = element_text(size = 7)
+  )
+@
+\end{center}
+
+Na podstawie wygenerowanego wykresu można stwierdzić, że przez ostatnie kilka lat liczba obsłużonych klientów \Sexpr{if (srednia_1 < srednia_2) "wzrosła" else "zmalała"}, a co za tym idzie, firma Space-U \Sexpr{if (srednia_1 < srednia_2) "rośnie" else "podupada"}.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\newpage
+
+\section{Pytanie 3}
+
+\textbf{Sprawdź, po których wycieczkach klienci wracają na kolejne, a po których mają dość i więcej ich nie widzicie. Czy są takie, które być może powinny zniknąć z oferty?}
+
+\begin{center}
+<<pytanie_3,fig=TRUE,echo=FALSE,eval=TRUE,height=3, width=4>>=
+query <- paste(
+  "SELECT DISTINCT customer_id",
+  "FROM flight_customer",
+  "INNER JOIN flight USING (flight_id)"
+)
+
+wracaja <- rep(0,40)
+nie_wracaja <- rep(0,40)
+
+df <- dbGetQuery(con, query)
+
+klienci <- as.numeric(df$customer_id)
+n<- length(klienci)
+
+for (i in 1:n){
+  id <- klienci[i]
+  
+  query <- paste(
+    "SELECT *",
+    "FROM flight_customer",
+    "INNER JOIN flight USING (flight_id)",
+    "WHERE customer_id LIKE", as.character(id)
+  )
+ 
+  df <- dbGetQuery(con, query)
+  
+  if (length(df$flight_id)==1){
+    nie_wracaja[df$offer_id[1]] <- nie_wracaja[df$offer_id[1]] + 1
+  }
+  if (length(df$flight_id)>1){
+    for ( j in 1:(length(df$offer_id)-1) ){
+      wracaja[df$offer_id[j]] <- wracaja[df$offer_id[j]] + 1
+    }
+    nie_wracaja[df$offer_id[length(df$offer_id)]] <- 
+      nie_wracaja[df$offer_id[length(df$offer_id)]]+1
+  }
+}
+
+query <- paste("SELECT *",
+          "from flight")
+
+df <- dbGetQuery(con, query)
+
+liczba_wystapien <- table(df$offer_id)
+
+id <- as.numeric(names(liczba_wystapien))
+id <- unlist(id) 
+
+wspolczynnik_powrotu <- c()
+for (i in id){
+  wspolczynnik <- wracaja[i]/(wracaja[i]+nie_wracaja[i])
+  wspolczynnik_powrotu <- c(wspolczynnik_powrotu, wspolczynnik)
+}
+
+wspolczynnik_niepowrotu <- 1 - wspolczynnik_powrotu
+
+dane <- data.frame(
+  offer_id = rep(id, each = 2),
+  status = rep(c("wracają", "nie wracają"), times = length(id)),
+  procent = as.vector(rbind(wspolczynnik_powrotu, wspolczynnik_niepowrotu))
+)
+
+library(ggplot2)
+
+ggplot(dane, aes(x = factor(offer_id), y = procent, fill = status)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Procent klientów wracających i niewracających po wycieczce",
+       x = "Numer wycieczki (offer_id)",
+       y = "Procent") +
+  scale_fill_manual(values = c("wracają" = "#B76DE2", "nie wracają" = "#adb5bd")) +
+  theme_minimal() +
+  theme(
+    axis.title.x = element_text(size = 7),
+    axis.title.y = element_text(size = 7),
+    axis.text.y = element_text(size = 4),
+    axis.text.x = element_text(size = 4),
+    legend.title = element_text(size = 7),
+    legend.text = element_text(size = 7),
+    plot.title = element_text(size = 8)
+  )
+indeksy_max <- id[which.max(wspolczynnik_powrotu)]
+indeksy_min <- id[which(wspolczynnik_powrotu == min(wspolczynnik_powrotu))]
+
+
+@
+\end{center}
+
+\Sexpr{if (length(dane$offer_id) < 80) "Jak widać, są pewne oferty wycieczek, które ani razu nie zostały zrealizowane przez firmę Space-U. Być może powinny zniknąć z oferty firmy, a na ich miejsce powinny pojawić się nowsze i lepiej dostosowane do preferencji klientów. Po przeanalizowaniu wycieczek, które się odbyły, można stwierdzić, że " else "W ciągu ostatnich kilku lat działania firmy wszystkie oferty wycieczek zostały zorganizowane przez firmę Space-U. Po przeanalizowaniu wszystkich wycieczek można stwierdzić, że "}
+klienci najczęściej wracali po \Sexpr{if (length(indeksy_max) > 1) "wycieczkach"  else "wycieczce"}  numer \Sexpr{paste(indeksy_max, collapse = ", ")}. Najmniej klientów wracało natomiast po \Sexpr{if (length(indeksy_min) >1) "wycieczkach"  else "wycieczce"}  numer \Sexpr{paste(indeksy_min, collapse = ", ")}.
+\newpage
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\section{Pytanie 4}
+\textbf{Znajdź najpopularniejsze oferty, porównaj koszta i zyski, czy są opłacalne?}
+
+<<pytanie_4,echo=FALSE,eval=True>>=
+query <- paste("SELECT *", 
+          "from flight")
+
+df <- dbGetQuery(con, query)
+
+liczba_wystapien <- table(df$offer_id)
+najpopularniejsze_liczba_wystapien <- liczba_wystapien[liczba_wystapien > max(liczba_wystapien)-2]
+
+najpopularniejsze_id <- as.numeric(names(najpopularniejsze_liczba_wystapien))
+najpopularniejsze_id <- unlist(najpopularniejsze_id) 
+
+kolumna_zyski <- c()
+kolumna_koszty <- c()
+kolumna_wyprawa <- c()
+n <- length(najpopularniejsze_id)
+
+for (j in 1:n){
+
+i <- najpopularniejsze_id[j]
+kolumna_wyprawa <- c(kolumna_wyprawa, i)
+query <- paste(
+"SELECT *",
+"from flight_customer",
+  "INNER JOIN flight USING (flight_id)",
+  "INNER JOIN offer USING (offer_id)",
+"WHERE offer_id LIKE", as.character(i)
+)
+
+df <- dbGetQuery(con, query)
+
+model <- df$model_id[1]
+bilety <- c(class_A = df$class_A[1], 
+            class_B = df$class_B[1], 
+            class_C = df$class_C[1])
+extra_cost <- df$extra_cost[1]
+
+zyski <- 0
+
+query <- paste(
+  "SELECT class, COUNT(*) AS count",
+  "FROM flight_customer",
+  "INNER JOIN flight USING (flight_id)",
+  "INNER JOIN offer USING (offer_id)",
+  "WHERE offer_id LIKE", as.character(i),
+  "GROUP BY class"
+)
+
+df <- dbGetQuery(con, query)
+
+df$class <- as.character(df$class)
+
+df$price <- bilety[df$class]
+
+zyski <- sum(df$price * as.numeric(df$count), na.rm = TRUE)
+
+koszty <- 0
+
+
+ile <- unname(najpopularniejsze_liczba_wystapien)[j]
+
+koszty <- extra_cost * ile
+
+query <- paste(
+  "SELECT *",
+  "FROM model",
+  "WHERE model_id LIKE", model
+)
+
+df <- dbGetQuery(con, query)
+paliwo_start <- df$fuel_per_start[1]
+
+query <- paste(
+  "SELECT *",
+  "FROM flight f",
+  "JOIN year_fuel fp",
+  "ON YEAR(f.departure) = YEAR(fp.year)",
+  "INNER JOIN offer USING (offer_id)",
+  "WHERE offer_id LIKE", as.character(i)
+)
+
+df <- dbGetQuery(con, query)
+
+koszty <- koszty + 2*sum(df$price)*paliwo_start
+
+kolumna_zyski <- c(kolumna_zyski, zyski)
+kolumna_koszty <- c(kolumna_koszty, koszty)
+}
+
+podsumowanie <- data.frame(wycieczka = kolumna_wyprawa, zyski=kolumna_zyski,
+                           koszty = kolumna_koszty,
+                           "zysk dla firmy"=round(kolumna_zyski-kolumna_koszty,2))
+@
+
+<<pytanie_4_wyniki,echo=FALSE,eval=TRUE,results=tex>>=
+podsumowanie$wycieczka <- as.integer(podsumowanie$wycieczka)
+tabela <- as.matrix(podsumowanie)
+colnames(tabela)<-c("Numer wycieczki","Przychody","Koszty","Zyski/straty")
+print(xtable::xtable(tabela,caption="Podsumowanie zysków/strat najpopularniejszych wycieczek",
+                     digits = c(0,0,2,2,2)),
+      type="latex",table.placement = "H",caption.placement = "top",
+      include.rownames = FALSE)
+@
+
+Na podstawie tabeli można powiedzieć, że najpopularniejszymi wycieczkami w ofercie firmy Space-U są wycieczki o numerach \Sexpr{paste(najpopularniejsze_id, collapse = ", ")}. W tabeli zostały przedstawione przychody, koszty a także całkowity zysk lub straty dla poszczególnej wycieczki. Na jej podstawie można stwierdzić, że 
+\Sexpr{ifelse (all(podsumowanie$zysk.dla.firmy > 0), "wszystkie z tych wycieczek są opłacalne dla firmy.",ifelse(sum(podsumowanie$zysk.dla.firmy > 0) > 0.5 * length(podsumowanie$zysk.dla.firmy), "większość z tych wycieczek jest opłacalna dla firmy.","mniejszość z tych wycieczek jest opłacalna dla firmy."))}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\newpage
+
+\section{Pytanie 5}
+
+\textbf{Znajdź kapitanów roku (kapitanów, którzy mają na koncie najwięcej przelotów w danym roku) każdego roku działania firmy.}
+
+<<pytanie_5,echo=FALSE,eval=True>>=
+captains <- dbGetQuery(con,
+                     "SELECT P.`year` 'rok', CONCAT(first_name,' ', last_name) 'imię i nazwisko',flights_count 'liczba przelotów'  FROM
+                     
+                      (SELECT COUNT(flight_employee.flight_id) AS flights_count, YEAR(departure) AS `year`, flight_employee.employee_id, first_name, last_name
+                      FROM employee INNER JOIN flight_employee
+                      ON employee.employee_id=flight_employee.employee_id
+                      INNER JOIN profession
+                      ON employee.profession_id = profession.profession_id
+                      INNER JOIN flight
+                      ON flight_employee.flight_id = flight.flight_id
+                      WHERE profession LIKE '%captain%'
+                      GROUP BY flight_employee.employee_id, `year`) AS P
+                      
+                      INNER JOIN
+                      
+                      (SELECT MAX(flights_count) AS max_count, `year` FROM
+                      (SELECT COUNT(flight_employee.flight_id) AS flights_count, YEAR(departure) AS `year`, flight_employee.employee_id, first_name, last_name
+                      FROM employee INNER JOIN flight_employee
+                      ON employee.employee_id=flight_employee.employee_id
+                      INNER JOIN profession
+                      ON employee.profession_id = profession.profession_id
+                      INNER JOIN flight
+                      ON flight_employee.flight_id = flight.flight_id
+                      WHERE profession LIKE '%captain%'
+                      GROUP BY flight_employee.employee_id, `year`) AS K
+                      GROUP BY `year`) AS M ON P.`year` = M.`year` AND P.flights_count = M.max_count
+                      ORDER BY P.`year`;
+                      ")
+@
+
+<<pytanie_5_wyniki,echo=FALSE,eval=TRUE,results=tex>>=
+tabela <- as.matrix(captains)
+colnames(tabela)<-c("Rok","Imię i naziwsko","Liczba przelotów")
+print(xtable::xtable(tabela,caption="Kapitanowie roku w latach działania firmy"),
+      type="latex",table.placement = "H",caption.placement = "top",
+      include.rownames = FALSE)
+@
+
+W tabeli powyżej znajdują się imiona i nazwiska kapitanów, którzy w danym roku odbyli najwięcej przelotów. 
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\section{Pytanie 6}
+
+\textbf{Sprawdź, który lot był dla firmy najbardziej opłacalny (przyniósł największy zysk).}
+
+<<pytanie_6,echo=FALSE,eval=True>>=
+trips <- dbGetQuery(con, "SELECT T.flight_id, fuel_per_start, price, class_A, class_A_seats,class_B, class_B_seats, class_C_seats, class_C, extra_cost FROM
+                    (SELECT flight_id, fuel_per_start, price, class_A, class_B, class_C, extra_cost
+                    FROM flight INNER JOIN offer ON offer.offer_id = flight.offer_id
+                    INNER JOIN model ON model.model_id = offer.model_id
+                    INNER JOIN year_fuel ON YEAR(year_fuel.year) = YEAR(flight.departure)) AS T
+                    INNER JOIN 
+                    (SELECT flight_id, SUM(IF(class=1, 1, 0)) class_A_seats, SUM(IF(class=2, 1, 0)) class_B_seats, SUM(IF(class=3, 1, 0)) class_C_seats
+                    FROM flight_customer
+                    GROUP BY flight_id
+                    ORDER BY flight_id, class) AS C ON T.flight_id = C.flight_id"  
+                    )
+trips$cost <- trips$fuel_per_start * trips$price + trips$extra_cost
+trips$income <- trips$class_A * trips$class_A_seats + trips$class_B * trips$class_B_seats + trips$class_C * trips$class_C_seats
+trips$profit <- trips$income - trips$cost
+profit <- data.frame(trips$flight_id, trips$profit)
+colnames(profit) <- c("flight_id", "profit")
+zi_best_flighto <- profit[which.max(profit$profit), 1:2]
+id<- zi_best_flighto$flight_id[1]
+
+query <- paste(
+"SELECT *",
+"from flight",
+"WHERE flight_id LIKE", as.character(id)
+)
+
+df <- dbGetQuery(con, query)
+id <- df$offer_id
+
+@
+
+Najbardziej dochodowym lotem był lot, który odbył się \Sexpr{df$departure[1]} z planety \Sexpr{wycieczki$destynacja[id]} na planetę \Sexpr{wycieczki$`planeta startu`[id]}. Był to \Sexpr{wycieczki$rodzaj[id]} organizowany w ramach wycieczki numer \Sexpr{id} z oferty firmy. Przyniósł on firmie zysk \Sexpr{round(zi_best_flighto$profit[1],2)} złotych.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\newpage
+\section{Pytanie 7}
+\textbf{Sprawdź, ile średnio miejsc jest marnowanych dla poszczególnych wycieczek. Czy któreś z nich można obsłużyć w pełni tańszym modelem rakiety?}
+
+\begin{center}
+<<pytanie_7, fig=TRUE,echo=FALSE,eval=TRUE,height=2.5, width=4>>=
+library(dplyr)
+library(tidyr)
+q_models <- paste(
+  "SELECT",
+  "m.model_id AS \"model_id\",",
+  "AVG(s.ship_price) + m.preserve_cost*36 AS \"average_price\",",
+  "m.class_A_seats AS \"Class_A\",",
+  "m.class_B_seats AS \"Class_B\",",
+  "m.class_C_seats AS \"Class_C\"",
+  "FROM",
+  "model m",
+  "JOIN",
+  "ship s",
+  "ON s.model_id = m.model_id",
+  "GROUP BY model_id;",
+  sep = "\n"
+)
+
+t_models <- dbGetQuery(con, q_models)
+
+q_ecess_space <-paste(
+  "SELECT",
+  "  offer_id,",
+  "  model_id,",
+  "  AVG(class_A_seats - bought_A_seats) AS avg_class_A_remaining,",
+  "  AVG(class_B_seats - bought_B_seats) AS avg_class_B_remaining,",
+  "  AVG(class_C_seats - bought_C_seats) AS avg_class_C_remaining,",
+  "  MAX(bought_A_seats) AS max_A_seats,",
+  "  MAX(bought_B_seats) AS max_B_seats,",
+  "  MAX(bought_C_seats) AS max_C_seats",
+  "FROM (",
+  "  SELECT", 
+  "    fc.flight_id AS flight_id,", 
+  "    f.offer_id AS offer_id,",
+  "    m.model_id AS model_id,",
+  "    m.class_A_seats AS class_A_seats,",
+  "    COUNT(CASE WHEN fc.class = 'class_A' THEN 1 END) AS bought_A_seats,",
+  "    m.class_B_seats AS class_B_seats,",
+  "    COUNT(CASE WHEN fc.class = 'class_B' THEN 1 END) AS bought_B_seats,",
+  "    m.class_C_seats AS class_C_seats,",
+  "    COUNT(CASE WHEN fc.class = 'class_C' THEN 1 END) AS bought_C_seats",
+  "  FROM flight_customer fc", 
+  "  JOIN flight f ON fc.flight_id = f.flight_id",
+  "  JOIN offer o ON f.offer_id = o.offer_id",
+  "  JOIN model m ON o.model_id = m.model_id",
+  "  GROUP BY fc.flight_id, f.offer_id, m.model_id, m.class_A_seats, m.class_B_seats, m.class_C_seats",
+  ") AS sub",
+  "GROUP BY offer_id;",
+  sep = "\n"
+)
+t_excess_space <- dbGetQuery(con, q_ecess_space)
+
+t_excess_space_long <- t_excess_space %>%
+  arrange(offer_id) %>%
+  mutate(group = ceiling(row_number() / 12)) %>%
+  pivot_longer(
+    cols = starts_with("avg_class_"),
+    names_to = "class",
+    values_to = "avg_remaining"
+  ) %>%
+  mutate(
+    class = case_when(
+      class == "avg_class_A_remaining" ~ "Class A",
+      class == "avg_class_B_remaining" ~ "Class B",
+      class == "avg_class_C_remaining" ~ "Class C"
+    ),
+    offer_id = as.factor(offer_id)
+  )
+
+A <- mean(t_excess_space$avg_class_A_remaining)
+B <- mean(t_excess_space$avg_class_B_remaining)
+C <- mean(t_excess_space$avg_class_C_remaining)
+
+
+ggplot(t_excess_space_long %>% filter(group == 1), aes(x = offer_id, y = avg_remaining, fill = class)) +
+  geom_col(position = "dodge") +
+  scale_fill_manual(values = c("#d2b7e5", "#c19ee0", "#b185db")) +
+  labs(title = "Średnia liczba zmarnowanych miejsc", x = "ID oferty", y = "Średnia liczba zmarnowanych miejsc") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size=5),
+    axis.title.y = element_text(size = 6),
+    axis.title.x = element_text(size = 6),
+    axis.text.y = element_text(size = 5),
+    legend.title = element_text(size = 7),
+    legend.text = element_text(size = 7),
+    plot.title = element_text(size = 8)
+  )
+@
+
+<<pytanie_7_1, fig=TRUE,echo=FALSE,eval=TRUE,height=2.5, width=4>>=
+ggplot(t_excess_space_long %>% filter(group == 2), aes(x = offer_id, y = avg_remaining, fill = class)) +
+  geom_col(position = "dodge") +
+  scale_fill_manual(values = c("#d2b7e5", "#c19ee0", "#b185db")) +
+  labs(title = "Średnia liczba zmarnowanych miejsc", x = "ID oferty", y = "Średnia liczba zmarnowanych miejsc") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size=5),
+    axis.title.y = element_text(size = 6),
+    axis.title.x = element_text(size = 6),
+    axis.text.y = element_text(size = 5),
+    legend.title = element_text(size = 7),
+    legend.text = element_text(size = 7),
+    plot.title = element_text(size = 8)
+  )
+@
+\end{center}
+
+<<pytanie_7_2, echo=FALSE,eval=TRUE>>=
+optimal_ship_offer <- c()
+for (offer in 1:nrow(t_excess_space)){
+  
+  max_A <- t_excess_space$max_A_seats[offer]
+  max_B <- t_excess_space$max_B_seats[offer]
+  max_C <- t_excess_space$max_C_seats[offer]
+  model <- t_excess_space$model_id[offer]
+  
+  optimal_ship <- 1
+  for (ship in 1:nrow(t_models)){
+    
+    ship_A <- t_models$Class_A[ship]
+    ship_B <- t_models$Class_B[ship]
+    ship_C <- t_models$Class_C[ship]
+    ship_price <- t_models$average_price[ship]
+    
+    if (max_A <= ship_A && max_B <= ship_B && max_C <= ship_C 
+        && ship_price < t_models$average_price[optimal_ship] ){
+      
+      optimal_ship <- ship
+    }
+  }
+  optimal_ship_offer <- c(optimal_ship_offer, optimal_ship)
+  
+}
+optimised_ships <- data.frame(t_excess_space$offer_id, t_excess_space$model_id, optimal_ship_offer )
+suma <- sum(optimised_ships$t_excess_space.model_id != optimised_ships$optimal_ship_offer)
+colnames(optimised_ships) <- c("Offer Id", "Current model for the offer", "Cheapest model that would accomodate all passengers")
+
+@
+
+<<pytanie_7_wyniki,echo=FALSE,eval=TRUE,results=tex>>=
+tabela <- as.matrix(optimised_ships)
+colnames(tabela)<-c("Numer wycieczki", "Aktualny model", "Tańszy model, który zmieściłby wszystkich klientów")
+print(xtable::xtable(tabela,caption="Propozycja tańszych modeli dla poszczególnych wycieczek",digits = 0),
+      type="latex",table.placement = "H",caption.placement = "top",
+      include.rownames = FALSE)
+@
+
+Z przeprowadzonej analizy wynika, że średnio podczas lotów firma marnuje \Sexpr{round(A,2)} miejsc klasy A, \Sexpr{round(B,2)} miejsc klasy B oraz \Sexpr{round(C,2)} miejsc klasy C.  \Sexpr{if (suma>0) paste("Jest możliwość poprawy tego wyniku, poprzez zmianę modelu statku w danej ofercie na tańszą opcję. Taka możliwość pojawia się w ",suma, "ofertach.") else "Niestety, nie ma możliwości zmiany na tańszy model dla którejś z ofert wycieczki."}
+
+
+\end{document}
